@@ -5,70 +5,23 @@ I built this service for the Canals backend assessment using Fastify, PostgreSQL
 ## Architecture
 
 ```mermaid
-flowchart LR
-    client([Client]) -->|POST /orders| api[Fastify API]
-
-    subgraph persistence[PostgreSQL]
-        order[(Order + Items)]
-        outbox[(Outbox event)]
-    end
-
+graph LR
+    client[Client] -->|POST orders| api[Fastify API]
     api -->|202 Accepted| client
-    api -->|atomic transaction| order
-    order --> outbox
-    outbox -->|ReservationRequested| inventoryQueue{{Inventory FIFO}}
+    api -->|atomic write| db[Order and Outbox]
+    db -->|ReservationRequested| inventoryQueue[Inventory FIFO queue]
     inventoryQueue --> reservation[Reservation worker]
-    reservation -->|nearest complete warehouse| inventory[(Inventory)]
-    reservation -->|PaymentRequested| paymentQueue[(Payment queue)]
+    reservation -->|nearest complete warehouse| inventory[Inventory]
+    reservation -->|PaymentRequested| paymentQueue[Payment queue]
     paymentQueue --> payment[Payment worker]
-    payment -->|creditCardNumber + amount + description| provider[Mock payment API]
-    payment -->|OrderPaid| events[(Order events)]
-    events --> fulfillment[Fulfillment worker]
-    fulfillment -->|READY_TO_FULFILL| order
+    payment -->|creditCardNumber, amount, description| provider[Mock payment API]
+    provider -->|approved| paid[OrderPaid event]
+    provider -->|declined| failed[Payment failed and stock released]
+    paid --> fulfillment[Fulfillment worker]
+    fulfillment -->|READY_TO_FULFILL| db
 ```
 
 I used hexagonal architecture for the project organization, separating the domain logic, application use cases, ports, and infrastructure adapters so business rules remain independent from frameworks and external services.
-
-## Request flow
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client
-    participant A as API
-    participant DB as PostgreSQL
-    participant O as Outbox publisher
-    participant IQ as Inventory FIFO
-    participant R as Reservation worker
-    participant PQ as Payment queue
-    participant P as Payment worker
-    participant M as Mock payment API
-    participant FQ as Order events
-    participant F as Fulfillment worker
-
-    C->>A: POST /orders + Idempotency-Key
-    A->>DB: Save order, items and ReservationRequested atomically
-    A-->>C: 202 PENDING_RESERVATION + orderId
-    O->>DB: Claim pending outbox event
-    O->>IQ: Publish ReservationRequested
-    IQ->>R: Deliver event in product-group order
-    R->>DB: Select nearest warehouse and reserve stock
-    R->>DB: Save PaymentRequested in the same transaction
-    R->>PQ: Publish PaymentRequested
-    PQ->>P: Deliver payment request
-    P->>DB: Read order total and payment data
-    P->>M: creditCardNumber + amount + description
-    alt Payment approved
-        M-->>P: Payment reference
-        P->>DB: Confirm inventory and mark PAID
-        P->>FQ: Publish OrderPaid
-        FQ->>F: Deliver OrderPaid
-        F->>DB: Mark READY_TO_FULFILL
-    else Payment declined
-        M-->>P: Declined
-        P->>DB: Mark PAYMENT_FAILED and release stock
-    end
-```
 
 ## Main decisions
 
@@ -83,17 +36,12 @@ sequenceDiagram
 ## Order states
 
 ```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> PENDING_RESERVATION
-    PENDING_RESERVATION --> PENDING_PAYMENT: stock reserved
-    PENDING_RESERVATION --> RESERVATION_FAILED: no warehouse / conflict
-    PENDING_PAYMENT --> PAID: payment approved
-    PENDING_PAYMENT --> PAYMENT_FAILED: payment declined
-    PAID --> READY_TO_FULFILL: OrderPaid processed
-    READY_TO_FULFILL --> [*]
-    RESERVATION_FAILED --> [*]
-    PAYMENT_FAILED --> [*]
+graph LR
+    pendingReservation[PENDING_RESERVATION] -->|stock reserved| pendingPayment[PENDING_PAYMENT]
+    pendingReservation -->|no warehouse or conflict| reservationFailed[RESERVATION_FAILED]
+    pendingPayment -->|payment approved| paid[PAID]
+    pendingPayment -->|payment declined| paymentFailed[PAYMENT_FAILED]
+    paid -->|OrderPaid processed| ready[READY_TO_FULFILL]
 ```
 
 ## Run locally
