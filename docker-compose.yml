@@ -1,0 +1,138 @@
+x-environment: &environment
+  DATABASE_URL: postgresql://canals:canals@db:5432/canals
+  DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-20}
+  LOG_LEVEL: ${LOG_LEVEL:-warn}
+  TRANSACTION_ATTEMPTS: ${TRANSACTION_ATTEMPTS:-8}
+  TRANSACTION_MAX_WAIT_MS: ${TRANSACTION_MAX_WAIT_MS:-10000}
+  TRANSACTION_TIMEOUT_MS: ${TRANSACTION_TIMEOUT_MS:-10000}
+  TRANSACTION_BACKOFF_BASE_MS: ${TRANSACTION_BACKOFF_BASE_MS:-20}
+  TRANSACTION_BACKOFF_MAX_MS: ${TRANSACTION_BACKOFF_MAX_MS:-500}
+  TRANSACTION_JITTER_MS: ${TRANSACTION_JITTER_MS:-50}
+  IDEMPOTENCY_SECRET: local-development-secret-change-in-production
+  PAYMENT_BASE_URL: http://mock-payment:3001
+  PAYMENT_TIMEOUT_MS: 2000
+  QUEUE_LOGGING: ${QUEUE_LOGGING:-true}
+  AWS_REGION: us-east-1
+  SQS_ENDPOINT: http://localstack:4566
+  ORDER_EVENTS_QUEUE_URL: http://localstack:4566/000000000000/order-events
+  INVENTORY_RESERVATIONS_QUEUE_URL: http://localstack:4566/000000000000/inventory-reservations.fifo
+  PAYMENT_REQUESTS_QUEUE_URL: http://localstack:4566/000000000000/payment-requests
+
+x-app: &app
+  image: canals-order-service:local
+  build: { context: ., target: runtime }
+  restart: unless-stopped
+  environment: *environment
+
+x-tooling: &tooling
+  image: canals-order-tooling:local
+  build: { context: ., target: build }
+  environment: *environment
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: canals
+      POSTGRES_USER: canals
+      POSTGRES_PASSWORD: canals
+    ports: ["5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canals"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:4.7.0
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports: ["4566:4566"]
+    volumes:
+      - ./scripts/localstack-init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs get-queue-url --queue-name order-events >/dev/null && awslocal sqs get-queue-url --queue-name inventory-reservations.fifo >/dev/null && awslocal sqs get-queue-url --queue-name payment-requests >/dev/null"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    <<: *tooling
+    command: ["npm", "run", "db:migrate"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  seed:
+    <<: *tooling
+    command: ["npm", "run", "db:seed"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  api:
+    <<: *app
+    command: ["node", "dist/processes/api.js"]
+    ports: ["3000:3000"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+      mock-payment: { condition: service_healthy }
+
+  mock-payment:
+    <<: *app
+    command: ["node", "dist/processes/mock-payment-provider.js"]
+    ports: ["3001:3001"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3001/health/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  outbox-publisher:
+    <<: *app
+    command: ["node", "dist/processes/outbox-publisher.js"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+
+  worker:
+    <<: *app
+    command: ["node", "dist/processes/worker.js"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+
+  reservation-worker:
+    <<: *app
+    command: ["node", "dist/processes/reservation-worker.js"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+
+  payment-worker:
+    <<: *app
+    command: ["node", "dist/processes/payment-worker.js"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      localstack: { condition: service_healthy }
+      mock-payment: { condition: service_healthy }
+
+  payment-reconciliation:
+    <<: *app
+    command: ["node", "dist/processes/payment-reconciliation.js"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      mock-payment: { condition: service_healthy }
+
+  integration-test:
+    <<: *tooling
+    profiles: ["test"]
+    command: ["npm", "run", "test:integration"]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      mock-payment: { condition: service_healthy }
+      localstack: { condition: service_healthy }
+
+volumes:
+  postgres-data:

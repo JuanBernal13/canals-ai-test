@@ -1,0 +1,127 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING_RESERVATION
+  PENDING_PAYMENT
+  PAID
+  PAYMENT_FAILED
+  RESERVATION_FAILED
+  READY_TO_FULFILL
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+}
+
+model Customer {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email  String  @unique
+  name   String
+  orders Order[]
+}
+
+model Product {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sku            String      @unique
+  name           String
+  unitPriceMinor BigInt      @map("unit_price_minor")
+  currency       String      @db.VarChar(3)
+  inventory      Inventory[]
+  orderItems     OrderItem[]
+}
+
+model Warehouse {
+  id        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String
+  latitude  Float
+  longitude Float
+  inventory Inventory[]
+  orders    Order[]
+}
+
+model Inventory {
+  warehouseId String    @map("warehouse_id") @db.Uuid
+  productId   String    @map("product_id") @db.Uuid
+  onHand      Int       @map("on_hand")
+  reserved    Int       @default(0)
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  product     Product   @relation(fields: [productId], references: [id])
+
+  @@id([warehouseId, productId])
+  @@index([productId])
+}
+
+model Order {
+  id               String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  customerId       String      @map("customer_id") @db.Uuid
+  warehouseId      String?     @map("warehouse_id") @db.Uuid
+  status           OrderStatus
+  totalMinor       BigInt      @map("total_minor")
+  currency         String      @db.VarChar(3)
+  shippingAddress  Json        @map("shipping_address")
+  paymentReference String?     @unique @map("payment_reference")
+  paymentKey       String      @unique @map("payment_key") @db.VarChar(128)
+  paymentCardNumber String     @map("payment_card_number") @db.VarChar(19)
+  createdAt        DateTime    @default(now()) @map("created_at")
+  reservationExpiresAt DateTime? @map("reservation_expires_at")
+  customer         Customer    @relation(fields: [customerId], references: [id])
+  warehouse        Warehouse?  @relation(fields: [warehouseId], references: [id])
+  items            OrderItem[]
+
+  @@index([customerId, createdAt])
+  @@index([status, reservationExpiresAt])
+}
+
+model OrderItem {
+  id             String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  orderId        String  @map("order_id") @db.Uuid
+  productId      String  @map("product_id") @db.Uuid
+  quantity       Int
+  unitPriceMinor BigInt  @map("unit_price_minor")
+  order          Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product        Product @relation(fields: [productId], references: [id])
+
+  @@unique([orderId, productId])
+}
+
+model OutboxEvent {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        String
+  payload     Json
+  createdAt   DateTime  @default(now()) @map("created_at")
+  publishedAt DateTime? @map("published_at")
+  availableAt DateTime  @default(now()) @map("available_at")
+  attempts    Int       @default(0)
+  claimedBy   String?   @map("claimed_by") @db.Uuid
+  claimUntil  DateTime? @map("claim_until")
+
+  @@index([publishedAt, availableAt, createdAt])
+}
+
+model InboxMessage {
+  eventId     String   @id @map("event_id") @db.Uuid
+  processedAt DateTime @default(now()) @map("processed_at")
+}
+
+model IdempotencyKey {
+  key         String            @id @db.VarChar(128)
+  customerId  String            @map("customer_id") @db.Uuid
+  fingerprint String            @db.Char(64)
+  status      IdempotencyStatus @default(PROCESSING)
+  response    Json?
+  createdAt   DateTime          @default(now()) @map("created_at")
+  completedAt DateTime?         @map("completed_at")
+  expiresAt   DateTime          @map("expires_at")
+
+  @@index([expiresAt])
+}

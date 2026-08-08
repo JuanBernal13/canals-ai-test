@@ -1,0 +1,49 @@
+{
+  "name": "canals-order-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/processes/api.ts",
+    "build": "prisma generate && tsc -p tsconfig.build.json",
+    "start": "node dist/processes/api.js",
+    "start:publisher": "node dist/processes/outbox-publisher.js",
+    "start:worker": "node dist/processes/worker.js",
+    "start:reservation-worker": "node dist/processes/reservation-worker.js",
+    "start:payment-worker": "node dist/processes/payment-worker.js",
+    "start:payments": "node dist/processes/mock-payment-provider.js",
+    "start:reconciliation": "node dist/processes/payment-reconciliation.js",
+    "db:migrate": "prisma migrate deploy",
+    "db:seed": "tsx scripts/seed.ts",
+    "db:seed:docker": "docker compose run --rm --build seed",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:api": "node scripts/test-api.mjs",
+    "test:bulk": "node scripts/bulk-load-test.mjs",
+    "prepare:data": "docker compose up -d --build"
+  },
+  "dependencies": {
+    "@aws-sdk/client-sqs": "3.1106.0",
+    "@fastify/helmet": "13.1.0",
+    "@fastify/rate-limit": "11.2.0",
+    "@fastify/swagger": "9.8.1",
+    "@fastify/swagger-ui": "6.1.1",
+    "@prisma/adapter-pg": "7.9.1",
+    "@prisma/client": "7.9.1",
+    "fastify": "5.11.2",
+    "pg": "8.22.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "@types/pg": "8.15.6",
+    "prisma": "7.9.1",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

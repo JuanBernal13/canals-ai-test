@@ -1,0 +1,26 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local environment and runtime artifacts
+.env
+.env.*
+!.env.example
+*.log
+logs/
+tmp/
+.tmp/
+
+# Test and tool caches
+.vitest/
+.eslintcache
+.npm/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
