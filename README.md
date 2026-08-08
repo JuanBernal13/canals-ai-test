@@ -11,13 +11,17 @@ graph LR
     api -->|atomic write| db[Order and Outbox]
     db -->|ReservationRequested| inventoryQueue[Inventory FIFO queue]
     inventoryQueue --> reservation[Reservation worker]
+    inventoryQueue -->|after 3 failed receives| inventoryDlq[Inventory FIFO DLQ]
     reservation -->|nearest complete warehouse| inventory[Inventory]
     reservation -->|PaymentRequested| paymentQueue[Payment queue]
     paymentQueue --> payment[Payment worker]
+    paymentQueue -->|after 5 failed receives| paymentDlq[Payment DLQ]
     payment -->|creditCardNumber, amount, description| provider[Mock payment API]
     provider -->|approved| paid[OrderPaid event]
     provider -->|declined| failed[Payment failed and stock released]
-    paid --> fulfillment[Fulfillment worker]
+    paid --> orderQueue[Order events queue]
+    orderQueue --> fulfillment[Fulfillment worker]
+    orderQueue -->|after 3 failed receives| orderDlq[Order events DLQ]
     fulfillment -->|READY_TO_FULFILL| db
 ```
 
