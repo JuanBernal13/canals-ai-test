@@ -17,6 +17,7 @@ export class HttpPaymentGatewayAdapter implements PaymentGateway {
   ) {}
 
   async charge(input: ChargeInput): Promise<{ reference: string }> {
+    const amount = toPaymentAmount(input.amountMinor);
     try {
       const response = await fetch(new URL(ROUTE.PAYMENTS, this.baseUrl), {
         method: 'POST',
@@ -26,8 +27,7 @@ export class HttpPaymentGatewayAdapter implements PaymentGateway {
         },
         body: JSON.stringify({
           creditCardNumber: input.cardNumber,
-          amountMinor: input.amountMinor.toString(),
-          currency: input.currency,
+          amount,
           description: input.description,
         }),
         signal: AbortSignal.timeout(this.timeoutMs),
@@ -95,4 +95,12 @@ export class HttpPaymentGatewayAdapter implements PaymentGateway {
     }
     throw new PaymentUnknownError();
   }
+}
+
+function toPaymentAmount(amountMinor: bigint): number {
+  const amount = Number(amountMinor);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new PaymentUnknownError();
+  }
+  return amount;
 }

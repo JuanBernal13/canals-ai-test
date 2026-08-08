@@ -26,6 +26,11 @@ describe('HttpPaymentGatewayAdapter', () => {
 
     expect(result).toEqual({ reference: 'pay_1' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(vi.mocked(fetchMock).mock.calls[0]![1]!.body as string)).toEqual({
+      creditCardNumber: charge.cardNumber,
+      amount: 2_500,
+      description: charge.description,
+    });
   });
 
   it('treats a definitive client rejection as unavailable without querying again', async () => {

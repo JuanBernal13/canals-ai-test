@@ -20,8 +20,7 @@ const paymentSchema = z.object({
     .min(VALIDATION.CARD_MIN_LENGTH)
     .max(VALIDATION.CARD_MAX_LENGTH)
     .regex(/^\d+$/),
-  amountMinor: z.string().regex(/^\d+$/),
-  currency: z.string().regex(/^[A-Z]{3}$/),
+  amount: z.number().int().nonnegative(),
   description: z.string().min(1).max(VALIDATION.PAYMENT_DESCRIPTION_LENGTH),
 });
 
