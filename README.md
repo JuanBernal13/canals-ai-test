@@ -37,6 +37,21 @@ I used hexagonal architecture for the project organization, separating the domai
 - The payment mock receives exactly `creditCardNumber`, `amount` in minor currency units, and `description`.
 - For this assessment, the original card number is stored temporarily. In production I would use provider tokenization or a PCI-scoped vault.
 
+## Reliability behavior
+
+- `202 Accepted` means the order was persisted and queued, not that payment and fulfillment have finished. Use `GET /orders/:id` to observe the final state.
+- Repeating the same request with the same `Idempotency-Key` replays the original response. Reusing that key with a different body returns `409`.
+- Inventory reservations run in `SERIALIZABLE` transactions with up to 8 retries, exponential backoff from 20 to 500 ms, and up to 50 ms of jitter.
+- FIFO message groups are derived from the requested product set. Conflicting combinations remain ordered while unrelated combinations can run concurrently.
+- After an ambiguous payment response, the worker queries the provider with the same idempotency key. Connection failures are protected by a circuit breaker, and expired pending payments are handled by reconciliation.
+- Failed messages are left in SQS for retry and are moved automatically to a DLQ after the configured receive limit.
+
+| Queue | Dead-letter queue | Receive limit |
+| --- | --- | ---: |
+| `inventory-reservations.fifo` | `inventory-reservations-dlq.fifo` | 3 |
+| `payment-requests` | `payment-requests-dlq` | 5 |
+| `order-events` | `order-events-dlq` | 3 |
+
 ## Order states
 
 ```mermaid
@@ -83,6 +98,13 @@ OpenAPI: `http://localhost:3000/openapi.json`
 
 Cards ending in `0000` are declined by the local payment mock.
 
+## Seed data
+
+- One demo customer: `00000000-0000-4000-8000-000000000001`.
+- Five products: backpack, bottle, headphones, mug, and keyboard.
+- Seven warehouses: Bogota, Cali, New York, Chicago, Dallas, Los Angeles, and Miami.
+- Every warehouse starts with 100 units of every product. The mock geocoder supports these destinations and additional predefined cities.
+
 Run a concurrent bulk load:
 
 ```powershell
@@ -106,10 +128,56 @@ npx prisma validate
 Queue logs:
 
 ```powershell
-docker compose logs -f localstack outbox-publisher reservation-worker payment-worker fulfillment-worker
+docker compose logs -f localstack outbox-publisher reservation-worker payment-worker worker
 ```
 
 The API uses `LOG_LEVEL=warn` by default. Queue logs remain controlled separately through `QUEUE_LOGGING`.
+
+## Configuration
+
+| Variable | Purpose | Local default |
+| --- | --- | --- |
+| `DATABASE_URL` | PostgreSQL connection | `postgresql://canals:canals@localhost:5432/canals` |
+| `DATABASE_POOL_MAX` | Connections per process | `20` |
+| `TRANSACTION_ATTEMPTS` | Serializable retry limit | `8` |
+| `PAYMENT_TIMEOUT_MS` | Payment HTTP timeout | `2000` |
+| `IDEMPOTENCY_SECRET` | Request fingerprint secret | local development value |
+| `LOG_LEVEL` | API log level | `warn` |
+| `QUEUE_LOGGING` | Queue lifecycle logs | `true` |
+| `SQS_ENDPOINT` | SQS or LocalStack endpoint | `http://localhost:4566` |
+
+## Operations
+
+Check containers and follow application logs:
+
+```powershell
+docker compose ps
+docker compose logs -f api outbox-publisher reservation-worker payment-worker worker
+```
+
+Open PostgreSQL or list all queues:
+
+```powershell
+docker compose exec -T db psql -U canals -d canals
+docker compose exec localstack awslocal sqs list-queues
+```
+
+Inspect DLQ counts:
+
+```powershell
+docker compose exec localstack awslocal sqs get-queue-attributes --queue-url http://localhost:4566/000000000000/inventory-reservations-dlq.fifo --attribute-names ApproximateNumberOfMessages
+docker compose exec localstack awslocal sqs get-queue-attributes --queue-url http://localhost:4566/000000000000/payment-requests-dlq --attribute-names ApproximateNumberOfMessages
+docker compose exec localstack awslocal sqs get-queue-attributes --queue-url http://localhost:4566/000000000000/order-events-dlq --attribute-names ApproximateNumberOfMessages
+```
+
+Restart while preserving data:
+
+```powershell
+docker compose down
+docker compose up -d --build
+```
+
+To deliberately delete the local database and rebuild from zero, use `docker compose down -v` before starting the stack again.
 
 ## Results
 
