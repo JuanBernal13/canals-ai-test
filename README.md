@@ -21,13 +21,54 @@ flowchart LR
     reservation -->|nearest complete warehouse| inventory[(Inventory)]
     reservation -->|PaymentRequested| paymentQueue[(Payment queue)]
     paymentQueue --> payment[Payment worker]
-    payment --> provider[Mock payment API]
+    payment -->|creditCardNumber + amount + description| provider[Mock payment API]
     payment -->|OrderPaid| events[(Order events)]
     events --> fulfillment[Fulfillment worker]
     fulfillment -->|READY_TO_FULFILL| order
 ```
 
 I used hexagonal architecture for the project organization, separating the domain logic, application use cases, ports, and infrastructure adapters so business rules remain independent from frameworks and external services.
+
+## Request flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as API
+    participant DB as PostgreSQL
+    participant O as Outbox publisher
+    participant IQ as Inventory FIFO
+    participant R as Reservation worker
+    participant PQ as Payment queue
+    participant P as Payment worker
+    participant M as Mock payment API
+    participant FQ as Order events
+    participant F as Fulfillment worker
+
+    C->>A: POST /orders + Idempotency-Key
+    A->>DB: Save order, items and ReservationRequested atomically
+    A-->>C: 202 PENDING_RESERVATION + orderId
+    O->>DB: Claim pending outbox event
+    O->>IQ: Publish ReservationRequested
+    IQ->>R: Deliver event in product-group order
+    R->>DB: Select nearest warehouse and reserve stock
+    R->>DB: Save PaymentRequested in the same transaction
+    R->>PQ: Publish PaymentRequested
+    PQ->>P: Deliver payment request
+    P->>DB: Read order total and payment data
+    P->>M: creditCardNumber + amount + description
+    alt Payment approved
+        M-->>P: Payment reference
+        P->>DB: Confirm inventory and mark PAID
+        P->>FQ: Publish OrderPaid
+        FQ->>F: Deliver OrderPaid
+        F->>DB: Mark READY_TO_FULFILL
+    else Payment declined
+        M-->>P: Declined
+        P->>DB: Mark PAYMENT_FAILED and release stock
+    end
+```
 
 ## Main decisions
 
