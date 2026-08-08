@@ -35,7 +35,6 @@ I used hexagonal architecture for the project organization, separating the domai
 - The nearest warehouse is selected only when it can fulfill the complete order.
 - Idempotency keys prevent duplicate orders and charges; inbox records protect duplicate events.
 - The payment mock receives exactly `creditCardNumber`, `amount` in minor currency units, and `description`.
-- For this assessment, the original card number is stored temporarily. In production I would use provider tokenization or a PCI-scoped vault.
 
 ## Reliability behavior
 
@@ -194,10 +193,6 @@ For five bulk runs with 190 requests, concurrency 190, and a 30-second timeout, 
 | p99 latency | 1,749 ms |
 
 These values are a local reference under that exact load, not a production capacity guarantee.
-
-## Production notes
-
-For production I would replace LocalStack and mocks with managed services, use card tokenization, store secrets in a secret manager, run migrations as a deployment step, and monitor queue age, DLQs, payment latency, database retries, and pending orders.
 
 ## Structure
 
