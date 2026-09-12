@@ -1,9 +1,10 @@
-import { DeleteMessageCommand, ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
+import { ReceiveMessageCommand, type SQSClient } from '@aws-sdk/client-sqs';
 import type { ProcessReservationRequested } from '../../../application/use-cases/process-reservation-requested.js';
 import { parseReservationRequestedEvent } from '../../../domain/events/reservation-requested.event.js';
 import { LIMIT } from '../../../shared/constants.js';
 import { reportBatchFailures } from './report-batch-failures.js';
-import { errorFields, logQueueEvent } from './queue-log.js';
+import { consumeSqsMessage } from './sqs-consumer-helpers.js';
+import { logQueueEvent } from './queue-log.js';
 
 export class SqsReservationConsumerAdapter {
   constructor(
@@ -46,26 +47,13 @@ export class SqsReservationConsumerAdapter {
   }
 
   private async consume(body?: string, receiptHandle?: string): Promise<void> {
-    if (!body || !receiptHandle) return;
-    const event = parseReservationRequestedEvent(JSON.parse(body) as unknown);
-    logQueueEvent('reservation-worker', 'message_received', {
-      eventId: event.eventId,
-      eventType: event.type,
-      groupKey: event.payload.groupKey,
-    });
-    try {
-      await this.processReservation.execute(event);
-      logQueueEvent('reservation-worker', 'message_processed', { eventId: event.eventId });
-      await this.client.send(
-        new DeleteMessageCommand({ QueueUrl: this.queueUrl, ReceiptHandle: receiptHandle }),
-      );
-      logQueueEvent('reservation-worker', 'message_deleted', { eventId: event.eventId });
-    } catch (error) {
-      logQueueEvent('reservation-worker', 'message_failed', {
-        eventId: event.eventId,
-        ...errorFields(error),
-      }, 'error');
-      throw error;
-    }
+    await consumeSqsMessage({
+      client: this.client,
+      queueUrl: this.queueUrl,
+      component: 'reservation-worker',
+      parse: parseReservationRequestedEvent,
+      process: (event) => this.processReservation.execute(event),
+      receivedFields: (event) => ({ groupKey: event.payload.groupKey }),
+    }, body, receiptHandle);
   }
 }

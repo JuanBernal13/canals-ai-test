@@ -1,3 +1,5 @@
+import { errorMetadata } from '../../../shared/app-error.js';
+
 type QueueLogLevel = 'info' | 'error';
 type QueueLogFields = Record<string, string | number | boolean | undefined>;
 
@@ -14,8 +16,5 @@ export function logQueueEvent(
 }
 
 export function errorFields(error: unknown): QueueLogFields {
-  if (error instanceof Error) {
-    return { errorName: error.name, errorMessage: error.message };
-  }
-  return { errorMessage: String(error) };
+  return errorMetadata(error);
 }

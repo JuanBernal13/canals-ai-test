@@ -1,6 +1,6 @@
 import { OrderError } from './order.error.js';
 import type { OrderStatus } from './order.types.js';
-import { ERROR_MESSAGE, HTTP_STATUS, ORDER_STATUS } from '../../shared/constants.js';
+import { ERROR_CODE, ERROR_MESSAGE, HTTP_STATUS, ORDER_STATUS } from '../../shared/constants.js';
 
 const transitions: Record<OrderStatus, readonly OrderStatus[]> = {
   [ORDER_STATUS.PENDING_RESERVATION]: [
@@ -19,6 +19,7 @@ export function assertOrderTransition(from: OrderStatus, to: OrderStatus): void 
     throw new OrderError(
       `${ERROR_MESSAGE.INVALID_ORDER_TRANSITION}: ${from} -> ${to}`,
       HTTP_STATUS.CONFLICT,
+      { code: ERROR_CODE.INVALID_ORDER_TRANSITION },
     );
   }
 }

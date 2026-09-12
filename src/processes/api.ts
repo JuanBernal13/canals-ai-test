@@ -1,7 +1,7 @@
 import { CreateOrder } from '../application/use-cases/create-order.js';
 import { GetOrder } from '../application/use-cases/get-order.js';
 import { IdempotentCreateOrder } from '../application/use-cases/idempotent-create-order.js';
-import { FastifyHttpAdapter } from '../api/fastify-http-adapter.js';
+import { buildServer } from '../api/server.js';
 import { config } from '../config/index.js';
 import { prisma } from '../infrastructure/database/prisma-client.js';
 import { PrismaOrderRepositoryAdapter } from '../infrastructure/database/repositories/prisma-order-repository.js';
@@ -12,7 +12,7 @@ import { sqsClient } from '../infrastructure/messaging/sqs/sqs-client.js';
 import { createDependencyChecks } from '../infrastructure/health/dependency-checks.js';
 
 const repository = new PrismaOrderRepositoryAdapter(prisma);
-const httpAdapter = new FastifyHttpAdapter({
+const app = await buildServer({
   createOrder: new IdempotentCreateOrder(
     new CreateOrder(
       repository,
@@ -33,8 +33,7 @@ const httpAdapter = new FastifyHttpAdapter({
       config.sqs.paymentQueueUrl,
     ],
   }),
-});
-const app = await httpAdapter.build({
+}, {
   closeResources: async () => {
     try {
       await prisma.$disconnect();

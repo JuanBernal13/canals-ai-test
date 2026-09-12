@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from '../../../generated/prisma/client.js';
 import { setTimeout as delay } from 'node:timers/promises';
 import { config } from '../../../config/index.js';
 import { PrismaOutboxEventWriter } from './prisma-outbox-event-writer.js';
+import { hasErrorCode, InvariantError } from '../../../shared/app-error.js';
 import type { OrderRepository } from '../../../application/ports/order-repository.js';
 import { OrderError } from '../../../domain/orders/order.error.js';
 import { assertOrderTransition } from '../../../domain/orders/order-transition.js';
@@ -14,6 +15,7 @@ import type {
 import type { Point } from '../../../domain/warehouses/point.js';
 import {
   DATABASE_ERROR_CODE,
+  ERROR_CODE,
   ERROR_MESSAGE,
   HTTP_STATUS,
   LIMIT,
@@ -125,11 +127,15 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
       select: { id: true, unitPriceMinor: true, currency: true },
     });
     if (products.length !== input.items.length) {
-      throw new OrderError(ERROR_MESSAGE.UNKNOWN_PRODUCT, HTTP_STATUS.BAD_REQUEST);
+      throw new OrderError(ERROR_MESSAGE.UNKNOWN_PRODUCT, HTTP_STATUS.BAD_REQUEST, {
+        code: ERROR_CODE.UNKNOWN_PRODUCT,
+      });
     }
     const currencies = new Set(products.map((product) => product.currency));
     if (currencies.size !== 1) {
-      throw new OrderError(ERROR_MESSAGE.MIXED_CURRENCIES, HTTP_STATUS.BAD_REQUEST);
+      throw new OrderError(ERROR_MESSAGE.MIXED_CURRENCIES, HTTP_STATUS.BAD_REQUEST, {
+        code: ERROR_CODE.MIXED_CURRENCIES,
+      });
     }
     const currency = products[0]!.currency;
     const productsById = new Map(products.map((product) => [product.id, product]));
@@ -171,7 +177,9 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === DATABASE_ERROR_CODE.FOREIGN_KEY_CONSTRAINT
       ) {
-        throw new OrderError(ERROR_MESSAGE.UNKNOWN_CUSTOMER, HTTP_STATUS.BAD_REQUEST);
+        throw new OrderError(ERROR_MESSAGE.UNKNOWN_CUSTOMER, HTTP_STATUS.BAD_REQUEST, {
+          code: ERROR_CODE.UNKNOWN_CUSTOMER,
+        });
       }
       throw error;
     }
@@ -212,7 +220,9 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
       ))), warehouse.id
     `);
     if (candidates.length === 0) {
-      throw new OrderError(ERROR_MESSAGE.NO_WAREHOUSE, HTTP_STATUS.CONFLICT);
+      throw new OrderError(ERROR_MESSAGE.NO_WAREHOUSE, HTTP_STATUS.CONFLICT, {
+        code: ERROR_CODE.NO_WAREHOUSE,
+      });
     }
 
     for (const warehouse of candidates) {
@@ -237,7 +247,10 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
               SELECT COUNT(*) AS updated FROM reserved_inventory
             `;
               if (Number(reservation?.updated ?? 0n) !== pending.items.length) {
-                throw new OrderError(ERROR_MESSAGE.WAREHOUSE_CHANGED, HTTP_STATUS.CONFLICT);
+                throw new OrderError(ERROR_MESSAGE.WAREHOUSE_CHANGED, HTTP_STATUS.CONFLICT, {
+                  code: ERROR_CODE.WAREHOUSE_CHANGED,
+                  retryable: true,
+                });
               }
               const updated = await transaction.order.updateMany({
                 where: { id: orderId, status: ORDER_STATUS.PENDING_RESERVATION },
@@ -248,7 +261,10 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
                 },
               });
               if (updated.count !== 1) {
-                throw new OrderError(ERROR_MESSAGE.WAREHOUSE_CHANGED, HTTP_STATUS.CONFLICT);
+                throw new OrderError(ERROR_MESSAGE.WAREHOUSE_CHANGED, HTTP_STATUS.CONFLICT, {
+                  code: ERROR_CODE.WAREHOUSE_CHANGED,
+                  retryable: true,
+                });
               }
               await this.outboxEvents.createPaymentRequested(transaction, orderId);
             },
@@ -267,14 +283,17 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
             }
             break;
           }
-          if (error instanceof OrderError && error.message === ERROR_MESSAGE.WAREHOUSE_CHANGED) {
+          if (error instanceof OrderError && hasErrorCode(error, ERROR_CODE.WAREHOUSE_CHANGED)) {
             break;
           }
           throw error;
         }
       }
     }
-    throw new OrderError(ERROR_MESSAGE.INVENTORY_CHANGED, HTTP_STATUS.CONFLICT);
+    throw new OrderError(ERROR_MESSAGE.INVENTORY_CHANGED, HTTP_STATUS.CONFLICT, {
+      code: ERROR_CODE.INVENTORY_CHANGED,
+      retryable: true,
+    });
   }
 
   async markReservationFailed(orderId: string): Promise<void> {
@@ -290,14 +309,21 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
         where: { id: orderId },
         include: { items: true },
       });
-      if (pendingOrder.warehouseId === null) throw new Error(ERROR_MESSAGE.RESERVATION_MISSING);
+      if (pendingOrder.warehouseId === null) {
+        throw new InvariantError(
+          ERROR_MESSAGE.RESERVATION_MISSING,
+          ERROR_CODE.RESERVATION_MISSING,
+        );
+      }
       assertOrderTransition(pendingOrder.status, ORDER_STATUS.PAID);
       const updated = await transaction.order.updateMany({
         where: { id: orderId, status: ORDER_STATUS.PENDING_PAYMENT },
         data: { status: ORDER_STATUS.PAID, paymentReference },
       });
       if (updated.count !== 1) {
-        throw new OrderError(ERROR_MESSAGE.ORDER_NOT_PENDING, HTTP_STATUS.CONFLICT);
+        throw new OrderError(ERROR_MESSAGE.ORDER_NOT_PENDING, HTTP_STATUS.CONFLICT, {
+          code: ERROR_CODE.ORDER_NOT_PENDING,
+        });
       }
       const items = JSON.stringify(
         pendingOrder.items.map((item) => ({
@@ -323,10 +349,18 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
         SELECT COUNT(*) AS updated FROM confirmed_inventory
       `;
       if (Number(confirmation?.updated ?? 0n) !== pendingOrder.items.length) {
-        throw new Error(ERROR_MESSAGE.RESERVATION_MISSING);
+        throw new InvariantError(
+          ERROR_MESSAGE.RESERVATION_MISSING,
+          ERROR_CODE.RESERVATION_MISSING,
+        );
       }
       const order = await transaction.order.findUniqueOrThrow({ where: { id: orderId } });
-      if (order.warehouseId === null) throw new Error(ERROR_MESSAGE.RESERVATION_MISSING);
+      if (order.warehouseId === null) {
+        throw new InvariantError(
+          ERROR_MESSAGE.RESERVATION_MISSING,
+          ERROR_CODE.RESERVATION_MISSING,
+        );
+      }
       await this.outboxEvents.createOrderPaid(transaction, order.id, order.warehouseId);
       return order;
     });
@@ -338,7 +372,12 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
         where: { id: orderId },
         include: { items: true },
       });
-      if (order.warehouseId === null) throw new Error(ERROR_MESSAGE.RESERVATION_MISSING);
+      if (order.warehouseId === null) {
+        throw new InvariantError(
+          ERROR_MESSAGE.RESERVATION_MISSING,
+          ERROR_CODE.RESERVATION_MISSING,
+        );
+      }
       if (order.status === ORDER_STATUS.PAYMENT_FAILED) return;
       assertOrderTransition(order.status, ORDER_STATUS.PAYMENT_FAILED);
       const updated = await transaction.order.updateMany({
@@ -374,7 +413,10 @@ export class PrismaOrderRepositoryAdapter implements OrderRepository {
         SELECT COUNT(*) AS updated FROM released_inventory
       `;
       if (Number(release?.updated ?? 0n) !== order.items.length) {
-        throw new Error(ERROR_MESSAGE.RESERVATION_MISSING);
+        throw new InvariantError(
+          ERROR_MESSAGE.RESERVATION_MISSING,
+          ERROR_CODE.RESERVATION_MISSING,
+        );
       }
     });
   }

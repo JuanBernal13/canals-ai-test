@@ -1,6 +1,6 @@
 import { OrderError } from './order.error.js';
 import type { OrderItemInput } from './order.types.js';
-import { HTTP_STATUS, LIMIT } from '../../shared/constants.js';
+import { ERROR_CODE, HTTP_STATUS, LIMIT } from '../../shared/constants.js';
 
 export function mergeOrderItems(items: OrderItemInput[]): OrderItemInput[] {
   const quantities = new Map<string, number>();
@@ -11,6 +11,7 @@ export function mergeOrderItems(items: OrderItemInput[]): OrderItemInput[] {
     throw new OrderError(
       `Maximum quantity per product is ${LIMIT.MAX_QUANTITY_PER_PRODUCT}`,
       HTTP_STATUS.BAD_REQUEST,
+      { code: ERROR_CODE.INVALID_ORDER_QUANTITY },
     );
   }
   return [...quantities]

@@ -2,7 +2,7 @@ import type { Geocoder } from '../../application/ports/geocoder.js';
 import type { Address } from '../../domain/orders/order.types.js';
 import type { Point } from '../../domain/warehouses/point.js';
 import { OrderError } from '../../domain/orders/order.error.js';
-import { ERROR_MESSAGE, HTTP_STATUS } from '../../shared/constants.js';
+import { ERROR_CODE, ERROR_MESSAGE, HTTP_STATUS } from '../../shared/constants.js';
 
 const CITY_COORDINATES: Record<string, Point> = {
   bogota: { latitude: 4.711, longitude: -74.0721 },
@@ -46,7 +46,11 @@ export class MockGeocoderAdapter implements Geocoder {
   async geocode(address: Address): Promise<Point> {
     const point = CITY_COORDINATES[normalizeCity(address.city)];
     if (!point) {
-      throw new OrderError(ERROR_MESSAGE.ADDRESS_NOT_GEOCODABLE, HTTP_STATUS.UNPROCESSABLE_ENTITY);
+      throw new OrderError(
+        ERROR_MESSAGE.ADDRESS_NOT_GEOCODABLE,
+        HTTP_STATUS.UNPROCESSABLE_ENTITY,
+        { code: ERROR_CODE.ADDRESS_NOT_GEOCODABLE },
+      );
     }
     return point;
   }

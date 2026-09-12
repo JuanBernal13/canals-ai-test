@@ -1,6 +1,7 @@
 import type { EventPublisher } from '../ports/event-publisher.js';
 import type { OutboxRepository } from '../ports/outbox-repository.js';
 import type { ProcessLogger } from '../ports/process-logger.js';
+import { errorMetadata } from '../../shared/app-error.js';
 
 export class PublishPendingEvents {
   constructor(
@@ -49,7 +50,7 @@ export class PublishPendingEvents {
         await this.outbox.markFailed(event.id, this.workerId, event.attempts);
         this.logger.error('event_publish_failed', {
           eventId: event.id,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          ...errorMetadata(error),
         });
         return false;
       }
